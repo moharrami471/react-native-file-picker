@@ -57,8 +57,8 @@ class HomeworkArchiveItem extends Component {
     constructor(props){
         super(props);
 
-        // جلوگیری از باز شدن چندباره‌ی پنجره Open with...
-        // (به جای class-field تا روی همه RNها بدون تنظیمات اضافی کار کند)
+        // FIX 1: جلوگیری از چندبار باز شدن پنجره Open with...
+        // (داخل constructor گذاشته شده تا روی همه RNها بدون تنظیمات خاص کار کند)
         this._openLock = {};
         this._openLockTimer = {};
 
@@ -178,8 +178,8 @@ class HomeworkArchiveItem extends Component {
                                         fileType: response.type,
                                         fileName: response2.name,
                                         fileData: response,
-                                        fileUri: pickedUri,       // <-- قبلاً response.uri بود
-                                        originalData: response,   // <-- نگه می‌داریم
+                                        fileUri: pickedUri,
+                                        originalData: response,
                                     }],
                                     imgUri: response2.uri,
                                     imagePath: response2.path,
@@ -189,7 +189,7 @@ class HomeworkArchiveItem extends Component {
                                         `${this.state.selectedFiles.length + 1} فایل انتخاب شده` :
                                         response2.name,
                                     fileData: response,
-                                    fileUri: pickedUri,         // <-- اضافه شد
+                                    fileUri: pickedUri,
                                 });
                             })
                             .catch((err) => {
@@ -202,13 +202,13 @@ class HomeworkArchiveItem extends Component {
                                     fileName: response.name,
                                     fileType: response.type,
                                     imagePath: response.uri,
-                                    fileUri: pickedUri,         // <-- قبلاً response.uri بود
+                                    fileUri: pickedUri,
                                     originalData: response
                                 }],
                                 fileName: response.name,
                                 fileType: response.type,
                                 imagePath: response.uri,
-                                fileUri: pickedUri,           // <-- قبلاً response.uri بود
+                                fileUri: pickedUri,
                                 fileData: response,
                             });
                         } else {
@@ -367,7 +367,7 @@ class HomeworkArchiveItem extends Component {
                             var p = /[پچجحخهعغفقثصضشسیبلاتنمکگوئدذرزطظژؤإأءًٌٍَُِّ\s]+$/;
                             pName = pName.replace(/[()]/g, '');
                             if(p.test(pName?.split('.')[0])) {
-                                // FIX: جلوگیری از پسوند msword برای application/msword
+                                // FIX 2: جلوگیری از ساخت پسوند msword (باید doc شود)
                                 let ext = typeFile?.split('/')[1];
                                 if (typeFile === 'application/msword') ext = 'doc';
                                 else if (typeFile === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') ext = 'docx';
@@ -527,11 +527,8 @@ class HomeworkArchiveItem extends Component {
         );
     }
 
-    // =========================
-    // UPDATED: downloadFile now accepts originalFileName and uses local mimeType
-    // =========================
     downloadFile(attachmentId, show, originalFileName) {
-        // جلوگیری از اجرای همزمان و چندباره
+        // FIX 1: جلوگیری از چندبار اجرا شدن
         const lockKey = `dl_${attachmentId}_${show ? 'open' : 'dl'}`;
         if (this._isLocked(lockKey)) return;
         this._lock(lockKey, 2500);
@@ -540,9 +537,13 @@ class HomeworkArchiveItem extends Component {
             ToastAndroid.show('در حال دانلود فایل...', 2000);
         }
 
-        let urlItem = show
-            ? 'http://api.modabberonline.com/api/pri/v1/classEventDones.getFileUrl'
-            : 'http://api.modabberonline.com/api/pri/v1/classEventsAttachments.getFileUrl';
+        let urlItem = '';
+        if(show) {
+            urlItem = 'http://api.modabberonline.com/api/pri/v1/classEventDones.getFileUrl';
+        }
+        else {
+            urlItem = 'http://api.modabberonline.com/api/pri/v1/classEventsAttachments.getFileUrl';
+        }
 
         fetch(urlItem, {
             method: 'POST',
@@ -552,125 +553,136 @@ class HomeworkArchiveItem extends Component {
                 'Content-Type': 'application/json',
             },
             body: attachmentId.toString(),
-        })
-            .then((response) => response.json())
+        }).then((response) => response.json())
             .then((responseJson) => {
                 if (responseJson === 'NotAvailableAtTheMoment') {
-                    Alert.alert('', 'فایل مورد نظر یافت نشد', [{ text: 'بسیار خب' }]);
-                    return;
+                    Alert.alert('',
+                        'فایل مورد نظر یافت نشد',
+                        [
+                            {text: 'بسیار خب'},
+                        ],
+                    );
                 }
+                else {
+                    let url = responseJson.fileDownloadUrl;
+                    let fileName = originalFileName || url.split('/').pop();
+                    try { fileName = decodeURIComponent(fileName); } catch (e) {}
 
-                const url = responseJson.fileDownloadUrl;
+                    // اسم امن (برای فارسی) + پسوند درست (doc/docx…)
+                    const safeName = this.getSafeLocalFileName(fileName, responseJson.mimeType);
 
-                let rawFileName = (url || '').split('/').pop() || `file_${Date.now()}`;
-                try { rawFileName = decodeURIComponent(rawFileName); } catch (e) {}
-
-                // اسم واقعی فایل برای پسوند (خیلی مهم برای doc/docx)
-                const nameForExt = originalFileName || rawFileName;
-
-                // اگر پسوند توی nameForExt نبود، از mimeType سرور برای انتخاب doc/docx استفاده کن
-                const safeName = this.getSafeLocalFileName(nameForExt, responseJson.mimeType);
-
-                const destPath = show
-                    ? `${RNFetchBlob.fs.dirs.CacheDir}/${safeName}`
-                    : `${RNFetchBlob.fs.dirs.DownloadDir}/${safeName}`;
-
-                const options = show
-                    ? { fileCache: true, path: destPath }
-                    : {
+                    let options = {
                         fileCache: true,
                         addAndroidDownloads: {
                             useDownloadManager: true,
                             notification: true,
-                            title: nameForExt,
-                            path: destPath,
+                            title: fileName,
+                            path: RNFetchBlob.fs.dirs.DownloadDir + `/${safeName}`,
                             description: 'Downloading file',
                         },
                     };
 
-                try {
-                    RNFetchBlob.config(options)
-                        .fetch('GET', url)
-                        .then((res) => {
-                            const realPath = res && res.path ? (res.path() || destPath) : destPath;
+                    // اگر show=true برای باز کردن، توی Cache دانلود کن تا مشکلات دسترسی کمتر شه
+                    if (show) {
+                        options = {
+                            fileCache: true,
+                            path: `${RNFetchBlob.fs.dirs.CacheDir}/${safeName}`,
+                        };
+                    }
 
-                            AsyncStorage.getItem('fileAttach').then((info) => {
-                                if (info !== null) {
-                                    let newInfo = JSON.parse(info);
-                                    let exists = false;
+                    try {
+                        RNFetchBlob.config(options)
+                            .fetch('GET', url)
+                            .then((res) => {
+                                const realPath = (res && res.path) ? (res.path() || (show ? `${RNFetchBlob.fs.dirs.CacheDir}/${safeName}` : RNFetchBlob.fs.dirs.DownloadDir + `/${safeName}`)) : (show ? `${RNFetchBlob.fs.dirs.CacheDir}/${safeName}` : RNFetchBlob.fs.dirs.DownloadDir + `/${safeName}`);
 
-                                    newInfo.map((item) => {
-                                        if (item.url === url) exists = true;
-                                    });
-
-                                    if (!exists) {
-                                        newInfo.push({
+                                let temp = false;
+                                AsyncStorage.getItem('fileAttach').then((info) => {
+                                    if (info !== null) {
+                                        let newInfo = JSON.parse(info);
+                                        newInfo.map((item, index) => {
+                                            if (item.url !== url) {
+                                                temp = true;
+                                            }
+                                        });
+                                        if (temp) {
+                                            newInfo.push({
+                                                url: url,
+                                                path: realPath,
+                                                mimeType: responseJson.mimeType,
+                                            });
+                                        }
+                                        AsyncStorage.setItem('fileAttach', JSON.stringify(newInfo));
+                                    } else {
+                                        let uurls = [];
+                                        uurls.push({
                                             url: url,
                                             path: realPath,
                                             mimeType: responseJson.mimeType,
-                                            originalName: nameForExt,
                                         });
+                                        AsyncStorage.setItem('fileAttach', JSON.stringify(uurls));
                                     }
-                                    AsyncStorage.setItem('fileAttach', JSON.stringify(newInfo));
-                                } else {
-                                    let uurls = [];
-                                    uurls.push({
-                                        url: url,
-                                        path: realPath,
-                                        mimeType: responseJson.mimeType,
-                                        originalName: nameForExt,
-                                    });
-                                    AsyncStorage.setItem('fileAttach', JSON.stringify(uurls));
-                                }
-                            });
-
-                            // فقط یکبار باز کن، بدون mimeType
-                            const openOnce = () =>
-                                FileViewer.open(realPath, {
-                                    showOpenWithDialog: true,
-                                    showAppsSuggestions: true,
-                                }).catch(() => {
-                                    Alert.alert('خطا', 'امکان باز کردن فایل وجود ندارد');
                                 });
 
-                            if (!show) {
-                                Alert.alert('', 'دانلود به پایان رسید', [
-                                    { text: 'باز کردن فایل', onPress: openOnce },
-                                    { text: 'باشه' },
-                                ]);
-                            } else {
-                                openOnce();
-                            }
-                        })
-                        .catch(() => {
-                            Alert.alert('', 'فایل مورد نظر یافت نشد');
-                        });
-                } catch (err) {
-                    Alert.alert('', 'فایل مورد نظر یافت نشد');
+                                // فقط یکبار باز کن (بدون mimeType تا خطای No app associated کم شود)
+                                const openOnce = () =>
+                                    FileViewer.open(realPath, {
+                                        showOpenWithDialog: true,
+                                        showAppsSuggestions: true,
+                                    }).catch(() => {});
+
+                                if(!show) {
+                                    Alert.alert(
+                                        '',
+                                        'دانلود به پایان رسید',
+                                        [
+                                            {
+                                                text: 'باز کردن فایل', onPress: () => openOnce(),
+                                            },
+                                            {text: 'باشه'},
+                                        ],
+                                    );
+                                }
+                                else if (show) {
+                                    openOnce();
+                                }
+                            })
+                            .catch((err) => {
+                                Alert.alert('', 'فایل مورد نظر یافت نشد');
+                            });
+                    } catch (err) {
+                        Alert.alert('', 'فایل مورد نظر یافت نشد');
+                    }
                 }
+
             })
-            .then(() => this.setState({ progressVisible: false }))
-            .catch(() => {
-                this.setState({ progressVisible: false });
-                Alert.alert('', 'خطا در ارتباط با سرور !');
+            .then(()=>this.setState({progressVisible:false}))
+            .catch((error) => {
+                this.setState({progressVisible:false});
+                Alert.alert(
+                    '',
+                    'خطا در ارتباط با سرور !',
+                );
             });
     }
-    // =========================
-    // UPDATED: beforeDownloadFile now accepts originalFileName
-    // =========================
+
     beforeDownloadFile(attachmentId, show, originalFileName) {
-        // جلوگیری از باز شدن چندباره پنجره
+        // FIX 1: جلوگیری از چندبار باز شدن پنجره
         const lockKey = `open_${attachmentId}`;
         if (this._isLocked(lockKey)) return;
         this._lock(lockKey, 2500);
 
         let flag = false;
         let pt = '';
-        let urlItem = show
-            ? 'http://api.modabberonline.com/api/pri/v1/classEventDones.getFileUrl'
-            : 'http://api.modabberonline.com/api/pri/v1/classEventsAttachments.getFileUrl';
-
-        try {
+        let mt = '';
+        let urlItem = '';
+        try{
+            if(show) {
+                urlItem = 'http://api.modabberonline.com/api/pri/v1/classEventDones.getFileUrl';
+            }
+            else {
+                urlItem = 'http://api.modabberonline.com/api/pri/v1/classEventsAttachments.getFileUrl';
+            }
             fetch(urlItem, {
                 method: 'POST',
                 headers: {
@@ -681,57 +693,529 @@ class HomeworkArchiveItem extends Component {
                 body: attachmentId.toString(),
             })
                 .then(response => {
-                    if (response.status === 200) return response.json();
-                    if (response.status === 204) {
-                        Alert.alert('', 'فایل مورد نظر یافت نشد', [{text: 'بسیار خب'}]);
+                    if(response.status === 200){
+                        return response.json();
                     }
-                    return null;
+                    else if(response.status === 204){
+                        Alert.alert(
+                            '',
+                            'فایل مورد نظر یافت نشد',
+                            [
+                                {text: 'بسیار خب', onPress: ()=> {return null;}},
+                            ]
+                        );
+                    }
                 })
                 .then((responseJson) => {
-                    if (!responseJson) return;
-
-                    const url = responseJson.fileDownloadUrl;
-
-                    AsyncStorage.getItem('fileAttach').then(async (info) => {
-                        if (info !== null) {
-                            let newInfo = JSON.parse(info);
-                            if (newInfo.length > 0) {
-                                newInfo.map((item) => {
-                                    if (item.url && item.url.toString() === url) {
-                                        flag = true;
-                                        pt = item.path;
+                    if(responseJson) {
+                        let url = responseJson.fileDownloadUrl;
+                        AsyncStorage.getItem('fileAttach').then(async (info) => {
+                            if (info !== null) {
+                                let newInfo = JSON.parse(info);
+                                if(newInfo.length > 0) {
+                                    await newInfo.map((item, index)=> {
+                                        if(item.url.toString() === url) {
+                                            flag = true;
+                                            pt = item.path;
+                                            mt = item.mimeType;
+                                        }
+                                    });
+                                    if(flag) {
+                                        await RNFS.exists(pt)
+                                            .then((result) => {
+                                                if(result) {
+                                                    FileViewer.open(pt, {
+                                                        showOpenWithDialog: true,
+                                                        showAppsSuggestions: true,
+                                                    })
+                                                        .then(() => {
+                                                            // success
+                                                        })
+                                                        .catch(error => {
+                                                            // اگر باز نشد، دانلود مجدد
+                                                            this.downloadFile(attachmentId, show, originalFileName);
+                                                        });
+                                                }
+                                                else {
+                                                    this.downloadFile(attachmentId, show, originalFileName);
+                                                }
+                                            })
+                                            .catch((err) => {
+                                                this.downloadFile(attachmentId, show, originalFileName);
+                                            });
                                     }
-                                });
-
-                                if (flag && pt) {
-                                    const exists = await RNFS.exists(pt).catch(() => false);
-                                    if (exists) {
-                                        FileViewer.open(pt, {
-                                            showOpenWithDialog: true,
-                                            showAppsSuggestions: true,
-                                        }).catch(() => {
-                                            this.downloadFile(attachmentId, show, originalFileName);
-                                        });
-                                    } else {
+                                    else {
                                         this.downloadFile(attachmentId, show, originalFileName);
                                     }
                                 } else {
                                     this.downloadFile(attachmentId, show, originalFileName);
                                 }
-                            } else {
+                            }
+                            else {
                                 this.downloadFile(attachmentId, show, originalFileName);
                             }
-                        } else {
-                            this.downloadFile(attachmentId, show, originalFileName);
-                        }
-                    });
+                        });
+                    }
+
                 })
-                .then(() => this.setState({progressVisible:false}))
-                .catch(() => {
+                .then(()=>this.setState({progressVisible:false}))
+                .catch((error) => {
                     this.setState({progressVisible:false});
-                    Alert.alert('', 'خطا در ارتباط با سرور !');
+                    Alert.alert(
+                        '',
+                        'خطا در ارتباط با سرور !',
+                    );
                 });
-        } catch (e) {}
+        }
+        catch (e) {
+        }
+    }
+
+    setModalVisible(visible) {
+        this.setState({
+            modalVisible: visible,
+            fileName: null,
+            imagePath: null,
+            fileType: null,
+            base64File: null,
+        });
+    }
+
+    async onStartRecord() {
+        let fileNameAudio = 'voice_' + Math.floor(Math.random() * 10000 + 2) + '.mp4';
+        rec = new Recorder(fileNameAudio).record().prepare((err, fsPath)=>{
+            this.setState({
+                audioUri: fsPath,
+                fileNameAudio: fileNameAudio,
+                audio: new Player(fsPath, {autoDestroy: false}),
+            });
+        });
+    }
+
+    onFilePrepare() {
+        if (this.state.audioUri && this.state.fileNameAudio) {
+            this.setState({
+                selectedFiles: [...this.state.selectedFiles, {
+                    fileName: this.state.fileNameAudio,
+                    imagePath: this.state.audioUri,
+                    fileType: 'audio/mp4',
+                    audioUri: this.state.audioUri,
+                    audio: this.state.audio
+                }],
+                fileName: this.state.selectedFiles.length > 0 ?
+                    `${this.state.selectedFiles.length + 1} فایل انتخاب شده` :
+                    this.state.fileNameAudio,
+                imagePath: this.state.audioUri,
+                fileType: 'audio/mp4',
+            });
+        }
+    }
+
+    async onStopRecord() {
+        if(rec !== null){
+            try {
+                await rec.stop(async (err) => {
+                    if(this.state.second > 0){
+                        await this.onFilePrepare();
+                    }
+                    else {
+                        ToastAndroid.show('برای ضبط صدا دکمه را نگه دارید', 2000);
+                    }
+                    await this.setState({
+                        showRecording: false,
+                        second: 0,
+                        minute: 0,
+                    });
+
+                });
+            }
+            catch (e) {
+                this.setState({showRecording: false});
+                rec = null;
+            }
+        }
+        else {
+            this.setState({showRecording: false});
+        }
+    }
+
+    async requestRecordPermission() {
+        try {
+            const granted = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+                {
+                    'title': 'درخواست اچازه دسترسی برای ضبط صوت',
+                    'message': 'برای ضبط صوت ما باید اجازه دسترسی به حافظه گوشی را داشته باشیم تا بتوانیم فایل ها را در حافظه ذخیره کنیم',
+                }
+            );
+        } catch (err) {
+        }
+    }
+
+    async startRecording() {
+        this.setState({
+            fileName: null,
+            imagePath: null,
+            fileType: null,
+            base64File: null,
+            audioUri: null,
+            fileNameAudio: '',
+            second: 0,
+            minute: 0,
+            showRecording: false,
+        }, () => {
+            PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO).then(async response => {
+                if (response === true){
+                    secondRef = await setInterval(()=> {
+                        if(this.state.second === 59) {
+                            this.setState({second: 0});
+                        }
+                        else {
+                            this.setState({second: this.state.second + 1});
+                        }
+                    }, 1000);
+                    minRef = await setInterval(()=> {
+                        this.setState({minute: this.state.minute + 1});
+                    }, 60000);
+                    await this.setState({showRecording: true}, () => {this.onStartRecord();});
+                }
+                else if (response === false){
+                    await this.requestRecordPermission();
+                }
+            });
+        });
+
+    }
+
+    async endRecording() {
+        await clearInterval(secondRef);
+        await clearInterval(minRef);
+        await this.setState({showRecording: false}, () => {this.onStopRecord();});
+    }
+
+    renderModalUploadButtons(){
+        if(this.state.checkUploadRenderButton === 'true'){
+            return(
+                <View style={publicStyles.selectorsContainer}>
+                    <TouchableWithoutFeedback  onPressIn={()=> {
+                        if (this.props.item.isExpired && !this.props.item.studentCanUploadAttachmentAfterExpiration) {
+                            Alert.alert(
+                                '', 'موعد تحویل گذشته است و شما قادر به بارگذاری فایل برای این تکلیف نمی باشید.',
+                                [{text: 'بسیار خب'}]);
+                        }
+                        else {
+                            this.startRecording();
+                        }
+                    }}
+                                               onPressOut={()=> {
+
+                                                   if (this.props.item.isExpired && !this.props.item.studentCanUploadAttachmentAfterExpiration) {
+                                                       Alert.alert(
+                                                           '', 'موعد تحویل گذشته است و شما قادر به بارگذاری فایل برای این تکلیف نمی باشید.',
+                                                           [{text: 'بسیار خب'}]);
+                                                   }
+                                                   else {
+                                                       this.endRecording();
+                                                   }
+                                               }}
+                                               style={publicStyles.fileSelectContainer}>
+                        <View>
+                            <View style={publicStyles.photoIconContainer}>
+                                <MCIcon name="microphone" style={[publicStyles.photoIcon, {color: this.state.showRecording ? 'red' : '#E2E7ED'}]} />
+                            </View>
+                            <View style={publicStyles.galeryIconCotainer}>
+                                <Text style={styles.textStyle}>ضبط صدا</Text>
+                            </View>
+                        </View>
+                    </TouchableWithoutFeedback>
+                    <TouchableEffect
+                        onPress={()=> {
+                            if (this.props.item.isExpired && !this.props.item.studentCanUploadAttachmentAfterExpiration) {
+                                Alert.alert(
+                                    '', 'موعد تحویل گذشته است و شما قادر به بارگذاری فایل برای این تکلیف نمی باشید.',
+                                    [{text: 'بسیار خب'}]);
+                            }
+                            else {
+                                ImagePicker.openPicker({
+                                    includeBase64: true,
+                                    mediaType: 'photo',
+                                    multiple: true, // چند انتخابی
+                                }).then((images) => {
+                                    if (!Array.isArray(images)) {
+                                        images = [images];
+                                    }
+
+                                    images.forEach((image) => {
+                                        ImageResizer.createResizedImage(image.path, 1200, 1200, 'JPEG', 60, 0)
+                                            .then((response) => {
+                                                this.setState({
+                                                    selectedFiles: [...this.state.selectedFiles, {
+                                                        imgUri: response.uri,
+                                                        imagePath: response.path,
+                                                        base64File: response.path,
+                                                        fileType: image.mime,
+                                                        fileName: response.name,
+                                                    }],
+                                                    imgUri: response.uri,
+                                                    imagePath: response.path,
+                                                    base64File: response.path,
+                                                    fileType: image.mime,
+                                                    fileName: this.state.selectedFiles.length > 0 ?
+                                                        `${this.state.selectedFiles.length + 1} فایل انتخاب شده` :
+                                                        response.name,
+                                                });
+                                            }).catch((err) => {
+                                            console.error('Image resize error:', err);
+                                        });
+                                    });
+                                });
+                            }
+                        }
+                        } style={publicStyles.rightSpace}>
+                        <View>
+                            <View style={publicStyles.photoIconContainer}>
+                                <MIcon style={publicStyles.photoIcon} name="photo-library" />
+                            </View>
+                            <View style={publicStyles.galeryIconCotainer}>
+                                <Text style={styles.textStyle}>گالری</Text>
+                            </View>
+                        </View>
+                    </TouchableEffect>
+                    <TouchableEffect onPress={()=> {
+                        if (this.props.item.isExpired && !this.props.item.studentCanUploadAttachmentAfterExpiration) {
+                            Alert.alert(
+                                '', 'موعد تحویل گذشته است و شما قادر به بارگذاری فایل برای این تکلیف نمی باشید',
+                                [{text: 'بسیار خب'}]);
+                        } else {
+                            ImagePicker.openCamera({includeBase64: true, mediaType: 'photo'}).then((image) => {
+                                ImageResizer.createResizedImage(image.path, 1200, 1200, 'JPEG', 60, 0).then((response) => {
+                                    this.setState({
+                                        selectedFiles: [...this.state.selectedFiles, {
+                                            imgUri: response.uri,
+                                            imagePath: response.path,
+                                            base64File: response.path,
+                                            fileType: image.mime,
+                                            fileName: response.name,
+                                        }],
+                                        imgUri: response.uri,
+                                        imagePath: response.path,
+                                        base64File: response.path,
+                                        fileType: image.mime,
+                                        fileName: this.state.selectedFiles.length > 0 ?
+                                            `${this.state.selectedFiles.length + 1} فایل انتخاب شده` :
+                                            response.name,
+                                    });
+                                }).catch((err) => {
+                                    console.error('Image resize error:', err);
+                                });
+                            });
+                        }
+                    }
+                    } style={publicStyles.cameraContainer}>
+                        <View>
+                            <View style={publicStyles.photoIconContainer}>
+                                <SIcon style={publicStyles.photoIcon} name="camera"  />
+                            </View>
+                            <View style={publicStyles.galeryIconCotainer}>
+                                <Text style={styles.textStyle}>دوربین</Text>
+                            </View>
+                        </View>
+                    </TouchableEffect>
+                    <TouchableEffect onPress={
+                        async ()=> {
+                            if (this.props.item.isExpired && !this.props.item.studentCanUploadAttachmentAfterExpiration) {
+                                Alert.alert(
+                                    '', 'موعد تحویل گذشته است و شما قادر به بارگذاری فایل برای این تکلیف نمی باشید',
+                                    [{text: 'بسیار خب'}]);
+                            } else {
+                                await this.documentPickerFiles();
+                            }
+                        }
+                    }  style={publicStyles.fileSelectContainer}>
+                        <View>
+                            <View style={publicStyles.photoIconContainer}>
+                                <LocalIcon style={publicStyles.photoIcon} name="icon_doc_attach" />
+                            </View>
+                            <View style={publicStyles.galeryIconCotainer}>
+                                <Text style={styles.textStyle}>انتخاب فایل</Text>
+                            </View>
+                        </View>
+                    </TouchableEffect>
+                </View>
+            );
+        }else{
+            return null;
+        }
+    }
+
+    renderUploadedFiles(){
+        if(this.state.classEventDoneData !== null){
+            return(
+                <View style={publicStyles.uploadContainer}>
+                    {
+                        this.state.classEventDoneData.attachments.map((item, key) => {
+                            let audioType = false;
+                            let fileFormat = item.filename.split('.')[item.filename.split('.').length - 1].toLowerCase();
+                            const audioTypes = ['mp3', 'mp4', 'ogg', 'wma', 'wav', 'raw', '3gp', 'aa', 'aac', 'aax', 'act', 'aiff', 'alac', 'amr', 'ape', 'au', 'awb', 'dct', 'dss', 'dvf', 'flac', 'gsm', 'iklax', 'ivs', 'm4a', 'm4b', 'm4p', 'mmf', 'mpc', 'msv', 'nmf', 'nsf', 'oga', 'mogg', 'opus', 'ra', 'rm', 'rf64', 'sln', 'tta', 'voc', 'vox', 'wma', 'wv', 'webm', '8svx', 'cda'];
+
+                            if(audioTypes.includes(fileFormat)){
+                                audioType = true;
+                            }
+
+                            return (
+                                <View key={key} style={publicStyles.rowContainerFile}>
+                                    <TouchableOpacity style={publicStyles.leftRow}>
+                                        <Text style={stylesPage.blackColor}>{item.filename}</Text>
+                                    </TouchableOpacity>
+
+                                    <View style={stylesPage.rightRow}>
+                                        {
+                                            audioType ?
+                                                <VoicePlayerPart item={item} haveTeacherAttach uploadedAttach />
+                                                :
+                                                <TouchableOpacity
+                                                    onPress={async () => {
+                                                        Platform.OS !== 'ios' ? await this.requestStoragePermission() : null;
+                                                        this.beforeDownloadFile(item.attachmentId, true, item.filename);
+                                                    }}>
+                                                    <Image source={attachDn} style={publicStyles.attachDnIcon} />
+                                                </TouchableOpacity>
+                                        }
+
+                                        <FIcon name="trash" style={[publicStyles.redColor, publicStyles.font20]}
+                                               onPress={() => this.beforeDelete(item.attachmentId)}/>
+                                    </View>
+                                </View>
+                            );
+                        })
+                    }
+                </View>
+            );
+        }
+    }
+
+    deleteUploadedFile(ClassEventDoneAttachmentId){
+        fetch('http://api.modabberonline.com/api/pri/v1/classEventDones.deleteAttachment', {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                ClassEventDoneAttachmentId: ClassEventDoneAttachmentId,
+            }),
+        }).then(async (response) => {
+            if(response.status.toString() === '200'){
+                this.getClassEventDoneInfo();
+            }
+        })
+            .then(()=>this.setState({progressVisible:false}))
+            .catch((error) => {
+                this.setState({progressVisible:false});
+                Alert.alert(
+                    '',
+                    'خطا در ارتباط با سرور !',
+                );
+            });
+    }
+
+    renderDownloadButton(){
+        if(this.state.checkDownloadRenderButton !== 0){
+            return(
+                <View style={stylesPage.downloadContainer}>
+                    <TouchableOpacity onPress={async ()=>{Platform.OS !== 'ios' ? await this.requestStoragePermission() : null; this.attemptToDownload();}} style={stylesPage.downloadBtn}>
+                        <Text style={stylesPage.downloadText}>دریافت ضمایم</Text>
+                        <LocalIcon style={stylesPage.iconAttach} name="icon_attach"/>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+        else {
+            return null;
+        }
+    }
+
+    renderIcon(){
+        if(this.state.checkAudioIsPlayed === false){
+            return(<ENIcon name={'controller-play'} style={{fontSize: 15, color: '#FFF'}} />);
+        } else {
+            return(<ENIcon name={'controller-paus'} style={{fontSize: 15, color: '#FFF'}} />);
+        }
+    }
+
+    renderRecordIcon() {
+        return <RIcon name="controller-record" style={styles.recordIcon} />;
+    }
+
+    renderDownloadableItems(){
+        return(
+            this.props.attachments && this.props.attachments.map((item, key) => {
+                let audioType = false;
+                let fileFormat = item.filename.split('.')[item.filename.split('.').length - 1].toLowerCase();
+                const audioTypes = ['mp3', 'mp4', 'ogg', 'wma', 'wav', 'raw', '3gp', 'aa', 'aac', 'aax', 'act', 'aiff', 'alac', 'amr', 'ape', 'au', 'awb', 'dct', 'dss', 'dvf', 'flac', 'gsm', 'iklax', 'ivs', 'm4a', 'm4b', 'm4p', 'mmf', 'mpc', 'msv', 'nmf', 'nsf', 'oga', 'mogg', 'opus', 'ra', 'rm', 'rf64', 'sln', 'tta', 'voc', 'vox', 'wma', 'wv', 'webm', '8svx', 'cda'];
+                if(audioTypes.includes(fileFormat)){
+                    audioType = true;
+                }
+                return(
+                    <TouchableOpacity key={key} onPress={() => this.beforeDownloadFile(item.attachmentId, false, item.filename)} style={stylesPage.attachBtn}>
+                        {
+                            audioType ?
+                                <VoicePlayerPart item={item} haveTeacherAttach />
+                                : null
+                        }
+                        <View>
+                            <Text>{`دریافت ضمیمه ${key + 1}`}</Text>
+                        </View>
+                        <View>
+                            <LocalIcon style={stylesPage.attachIconLocal} name="icon_attach" />
+                        </View>
+                    </TouchableOpacity>
+                );
+            })
+        );
+    }
+
+    onUrlPress(url) {
+        if (WWW_URL_PATTERN.test(url)) {
+            Linking.openURL(`http://${url}`);
+        } else {
+            Linking.openURL(url);
+        }
+    }
+
+    onPhonePress(phone) {
+        const options = ['Call', 'Text', 'Cancel'];
+        const cancelButtonIndex = options.length - 1;
+        this.context.actionSheet().showActionSheetWithOptions(
+            {
+                options,
+                cancelButtonIndex,
+            },
+            (buttonIndex) => {
+                switch (buttonIndex) {
+                    case 0:
+                        Communications.phonecall(phone, true);
+                        break;
+                    case 1:
+                        Communications.text(phone);
+                        break;
+                    default:
+                        break;
+                }
+            },
+        );
+    }
+
+    onEmailPress(email) {
+        Communications.email([email], null, null, null, null);
+    }
+
+    // حذف یک فایل از لیست فایل‌های انتخاب شده
+    removeSelectedFile(index) {
+        const newFiles = [...this.state.selectedFiles];
+        newFiles.splice(index, 1);
+        this.setState({ selectedFiles: newFiles });
     }
 
     // =========================
@@ -761,7 +1245,34 @@ class HomeworkArchiveItem extends Component {
         });
     };
 
-    // (این متد رو نگه داشتی؛ فقط fix برای msword => doc)
+    getCorrectMimeType = (filename) => {
+        const name = (filename || '').split('?')[0].split('#')[0];
+        const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+
+        const mimeTypes = {
+            doc: 'application/msword',
+            docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            ppt: 'application/vnd.ms-powerpoint',
+            pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            xls: 'application/vnd.ms-excel',
+            xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            pdf: 'application/pdf',
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+            png: 'image/png',
+            mp3: 'audio/mpeg',
+            wav: 'audio/wav',
+            m4a: 'audio/mp4',
+            mp4: 'video/mp4',
+            txt: 'text/plain',
+            zip: 'application/zip',
+            rar: 'application/vnd.rar',
+            xz: 'application/x-xz',
+        };
+
+        return mimeTypes[ext] || null;
+    };
+
     getSafeLocalFileName = (originalName, mimeType) => {
         const clean = (originalName || '').split('?')[0].split('#')[0];
         const extFromName = clean.includes('.') ? clean.split('.').pop().toLowerCase() : '';
@@ -790,10 +1301,395 @@ class HomeworkArchiveItem extends Component {
         return safe;
     };
 
-    // NOTE: بقیه متدهای فایل شما (renderها، openFileSelected، deleteUploadedFile، …)
-    // در این نسخه کوتاه شده‌اند چون هدف فایل «فیکس بعد از آپلود + پسوند msword + چندبار open-with» بود.
-    // اگر می‌خوای کل فایل ۱۰۰٪ با همه متدهای پایین هم دقیقاً کپی شود، بگو تا نسخه کامل (بدون حذف) را جایگزین کنم.
+    openFileSelected = async (file) => {
+        try {
+            const fileName = file.fileName || file.name || file?.originalData?.name || `file_${Date.now()}`;
+
+            let sourceUri =
+                file.fileUri ||
+                file.imagePath ||
+                file.imgUri ||
+                file.uri ||
+                file?.originalData?.fileCopyUri ||
+                file?.originalData?.uri;
+
+            if (!sourceUri || typeof sourceUri !== 'string') {
+                throw new Error('Invalid sourceUri');
+            }
+
+            if (sourceUri.startsWith('file://content://')) {
+                sourceUri = sourceUri.replace('file://', '');
+            }
+
+            const cacheDir =
+                Platform.OS === 'android'
+                    ? RNFS.ExternalCachesDirectoryPath
+                    : RNFS.CachesDirectoryPath;
+
+            await RNFS.mkdir(cacheDir);
+
+            const cleanName = (fileName || '').split('?')[0].split('#')[0];
+            const ext =
+                cleanName.includes('.') && cleanName.split('.').pop() && !cleanName.split('.').pop().includes('/')
+                    ? cleanName.split('.').pop()
+                    : '';
+
+            const isAscii = /^[\x00-\x7F]+$/.test(cleanName);
+
+            const baseName = isAscii
+                ? cleanName
+                : `file_${Date.now()}${ext ? '.' + ext : ''}`;
+            const safeBase = baseName.replace(/[\\/:*?"<>|\u0000-\u001F]/g, '_');
+            const safeName = `${Date.now()}_${safeBase}`;
+
+            const targetPath = `${cacheDir}/${safeName}`;
+
+            const exists = await RNFS.exists(targetPath);
+            if (exists) {
+                await RNFS.unlink(targetPath);
+            }
+
+            if (Platform.OS === 'android' && sourceUri.startsWith('content://')) {
+                await this.copyContentUriToPath(sourceUri, targetPath);
+                await FileViewer.open(targetPath, {
+                    showOpenWithDialog: true,
+                    showAppsSuggestions: true,
+                });
+                return;
+            }
+
+            const normalizedSource = sourceUri.startsWith('file://')
+                ? sourceUri.replace('file://', '')
+                : sourceUri;
+
+            await RNFS.copyFile(normalizedSource, targetPath);
+
+            await FileViewer.open(targetPath, {
+                showOpenWithDialog: true,
+                showAppsSuggestions: true,
+            });
+
+        } catch (err) {
+            console.log('OPEN FILE ERROR:', err);
+            Alert.alert('خطا', 'امکان باز کردن فایل وجود ندارد');
+        }
+    };
+
+    renderIconAudio(file){
+        if(file.checkAudioIsPlayed === false || !file.checkAudioIsPlayed){
+            return(<ENIcon name={'controller-play'} style={{fontSize: 15, color: '#FFF'}} />);
+        } else {
+            return(<ENIcon name={'controller-paus'} style={{fontSize: 15, color: '#FFF'}} />);
+        }
+    }
+
+    // نمایش لیست فایل‌های انتخاب شده
+    renderSelectedFiles() {
+        if (this.state.selectedFiles.length === 0) {
+            return null;
+        }
+
+        return (
+            <View style={publicStyles.mrTopName}>
+                {this.state.selectedFiles.map((file, index) => (
+                    <View key={index} style={publicStyles.rowContainerFile}>
+                        <TouchableOpacity onPress={() => this.openFileSelected(file)} style={[publicStyles.leftRow, {paddingBottom: 5}]}>
+                            <Text style={publicStyles.roboto}>{file.fileName}</Text>
+                        </TouchableOpacity>
+                        <View style={[publicStyles.rightRow, {paddingBottom: 7}]}>
+                            {
+                                file.fileType && file.fileType.includes('audio') && file.audio ?
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            const newFiles = [...this.state.selectedFiles];
+                                            const currentFile = newFiles[index];
+
+                                            if (currentFile.checkAudioIsPlayed) {
+                                                currentFile.audio.pause(() => {
+                                                    currentFile.checkAudioIsPlayed = false;
+                                                    this.setState({ selectedFiles: newFiles });
+                                                });
+                                            } else {
+                                                currentFile.audio.play(() => {
+                                                    currentFile.checkAudioIsPlayed = true;
+                                                    this.setState({ selectedFiles: newFiles });
+
+                                                    setTimeout(() => {
+                                                        currentFile.audio.pause(() => {
+                                                            currentFile.checkAudioIsPlayed = false;
+                                                            this.setState({ selectedFiles: newFiles });
+                                                        });
+                                                    }, currentFile.audio.duration);
+                                                });
+                                            }
+                                        }}>
+                                        <View style={stylesPage.playerContainer}>
+                                            {this.renderIconAudio(file)}
+                                        </View>
+                                    </TouchableOpacity>
+                                    :
+                                    <TouchableOpacity onPress={() => this.openFileSelected(file)}>
+                                        <Image source={attachDn} style={publicStyles.attachDnIcon} />
+                                    </TouchableOpacity>
+                            }
+                            <IIcon name="close" style={[publicStyles.redColor, publicStyles.font20]}
+                                   onPress={() => this.removeSelectedFile(index)} />
+                        </View>
+                    </View>
+                ))}
+            </View>
+        );
+    }
+
+    render() {
+        return (
+            <View>
+                <Modal
+                    animationType="fade"
+                    transparent={true}
+                    visible={this.state.modalVisiblePercent}
+                    onRequestClose={() => {
+                    }}>
+                    <View style={publicStyles.mediaChoose}>
+                        <View style={publicStyles.mediaChooseBoxes}>
+                            <Text style={publicStyles.loadingTxt}>در حال بارگذاری اطلاعات</Text>
+                            <ProgressBar width={200} height={15} color={'green'} progress={this.state.percentCompleted / 100} />
+                            <Text style={publicStyles.percentText}>
+                                {this.state.percentCompleted} %
+                            </Text>
+                        </View>
+                    </View>
+                </Modal>
+
+                <Modal
+                    animationType="fade"
+                    transparent={true}
+                    visible={this.state.modalVisibleGallery}
+                    onRequestClose={() => {
+                        this.setState({modalVisibleGallery: false});
+
+                    }}>
+                    <View style={publicStyles.mediaChoose}>
+                        <View style={publicStyles.mediaChooseBox}>
+                            <Text style={publicStyles.mediaChooseText}>انتخاب رسانه</Text>
+                            <Text onPress={()=> {this.setState({mediaTypeChoosen: 'video'}, ()=> {this.mediaPicker();});}} style={publicStyles.chooseTitles}>انتخاب یا گرفتن ویدئو</Text>
+                            <Text onPress={()=> {this.setState({mediaTypeChoosen: 'photo'}, ()=> {this.mediaPicker();});}} style={publicStyles.chooseTitles}>انتخاب یا گرفتن عکس</Text>
+                        </View>
+                        <TouchableOpacity onPress={()=> {this.setState({modalVisibleGallery: false});}} style={publicStyles.cancelTextContainer}>
+                            <Text style={publicStyles.cancelText}>لعو</Text>
+                        </TouchableOpacity>
+                    </View>
+                </Modal>
+
+                <Modal
+                    animationType="fade"
+                    transparent={true}
+                    visible={this.state.modalVisible}
+                    onRequestClose={() => {
+                        this.setModalVisible(false);
+                        this.setState({
+                            selectedFiles: [],
+                        });
+                    }}
+                >
+                    <View style={publicStyles.mediaChoose}>
+                        <View style={stylesPage.hwArchiveContainer}>
+                            <LinearGradient start={{x: 0, y: 0}} end={{x: 1, y: 0}} colors={[mainColors.appColorDark, mainColors.appColorMedium, mainColors.appColorLight]}>
+                                <View style={publicStyles.hwArchiveBox}>
+                                    <View style={publicStyles.marginLeftStyle}>
+                                        <IIcon name={'close'} style={[publicStyles.dirStyleIcon, {fontSize: normalize(25)}]} onPress={()=>this.setState({modalVisible:false, selectedFiles: []})} />
+                                    </View>
+                                    <View style={publicStyles.fileTextContainer}>
+                                        <Text style={publicStyles.uploadTxt}>بارگذاری ضمایم تکلیف</Text>
+                                    </View>
+                                </View>
+                            </LinearGradient>
+                            <ScrollView keyboardShouldPersistTaps="always" nestedScrollEnabled={true}>
+                                <View style={publicStyles.lessonContainer}>
+                                    {
+                                        this.props.item && this.props.item.isExpired ?
+                                            <View style={stylesPage.expiredContainer}>
+                                                <Text style={stylesPage.expText}>{this.props.item.studentCanUploadAttachmentAfterExpiration ?  'موعد تحويل تكليف به پايان رسيده است. تکلیف شما با برچسب تاخیر برای دبیر ارسال خواهد شد.' : 'موعد تحویل گذشته است.'} </Text>
+                                                <FIcon name="info" style={{color: 'orange', fontSize: 20}} />
+                                            </View>
+                                            : null
+                                    }
+                                    <Text style={publicStyles.lessonText}>{`${this.props.lessonName} ${this.props.lessonName !== '' && this.props.title !== '' ? '-' : ''} ${this.props.title}`}</Text>
+                                    <ParsedText
+                                        style={publicStyles.lessonDescription}
+                                        parse={[
+                                            { type: 'url', style: stylesPage.linkStyle, onPress: this.onUrlPress },
+                                            { type: 'phone', style: stylesPage.linkStyle,  onPress: this.onPhonePress },
+                                            { type: 'email',style: stylesPage.linkStyle,  onPress: this.onEmailPress },
+                                        ]}
+                                        childrenProps={{ ...this.props.textProps }}
+                                    >
+                                        {this.props.description}
+                                    </ParsedText>
+                                </View>
+                                {this.renderModalUploadButtons()}
+                                {
+                                    this.state.showRecording ?
+                                        <View style={styles.recordIconContainer}>
+                                            {this.renderRecordIcon()}
+                                            <Text style={styles.secondsText}>{this.state.minute.toString().length === 1 ? '0' + this.state.minute : this.state.minute} : {this.state.second.toString().length === 1 ? '0' + this.state.second : this.state.second}</Text>
+                                        </View>
+                                        : null
+                                }
+                                {this.renderSelectedFiles()}
+                                <View>
+                                    {this.renderUploadedFiles()}
+                                </View>
+                            </ScrollView>
+                            {
+                                this.props.item.isExpired ?
+                                    (this.props.item.studentCanUploadAttachmentAfterExpiration ?
+                                        <View style={publicStyles.regBtnContainer}>
+                                            <Button onPress={()=>this.beforeUploadFile()} style={stylesPage.regBtn}>
+                                                <Text style={publicStyles.fontedText}>ثبت</Text>
+                                            </Button>
+                                        </View>
+                                        : null)
+                                    :
+                                    <View style={publicStyles.regBtnContainer}>
+                                        <Button onPress={()=>this.beforeUploadFile()} style={stylesPage.regBtn}>
+                                            <Text style={publicStyles.fontedText}>ثبت</Text>
+                                        </Button>
+                                    </View>
+                            }
+                        </View>
+                    </View>
+                </Modal>
+
+                <Modal
+                    animationType="fade"
+                    transparent={true}
+                    visible={this.state.showDownloadModal}
+                    onRequestClose={() => {
+                        this.setState({showDownloadModal: false});
+                    }}>
+                    <View style={publicStyles.mediaChoose}>
+                        <View style={publicStyles.receive}>
+                            <LinearGradient start={{x: 0, y:0}} end={{x: 1, y: 0}} colors={[mainColors.appColorDark, mainColors.appColorMedium, mainColors.appColorLight]}>
+                                <View style={publicStyles.hwArchiveBox}>
+                                    <View style={publicStyles.marginLeftStyle}>
+                                        <IIcon style={publicStyles.closeIconUpload} onPress={() => {this.setState({showDownloadModal: false});}} name="close" />
+                                    </View>
+                                    <View style={publicStyles.fileTextContainer}>
+                                        <Text style={publicStyles.uploadTxt}>دریافت ضمایم تکلیف</Text>
+                                    </View>
+                                </View>
+                            </LinearGradient>
+                            <ScrollView keyboardShouldPersistTaps="always" nestedScrollEnabled={true} style={{height: '50%'}}>
+                                <View style={publicStyles.lessonContainer}>
+                                    <Text style={publicStyles.lessonText}>{`${this.props.lessonName} ${this.props.lessonName !== '' && this.props.title !== '' ? '-' : ''} ${this.props.title}`}</Text>
+                                </View>
+                                {this.renderDownloadableItems()}
+                            </ScrollView>
+                        </View>
+                    </View>
+                </Modal>
+
+                <View style={[stylesPage.iconTypeContainer, {backgroundColor:this.props.backgroundColor}]}>
+                    <View style={stylesPage.iconTypeBox}>
+                        <View>
+                            {
+                                this.props.iconType === 'MaterialCommunityIcons' ?
+                                    <MCIcon style={{color:this.checkColor(), fontSize: 25}} name={this.props.icon} />
+                                    :
+                                    <IIcon style={{color:this.checkColor(), fontSize: 25}} name={this.props.icon} />
+                            }
+                        </View>
+                        <View>
+                            <Text fontSize={'2xl'} style={publicStyles.lessonNameIcon}>{this.props.lessonName}</Text>
+                        </View>
+                    </View>
+                    <View style={stylesPage.deliveryDateContainer}>
+                        <View style={publicStyles.flexRowStyle}>
+                            <View style={publicStyles.textSpace}>
+                                <Text style={publicStyles.submitDateText}>{this.props.submitDate}</Text>
+                            </View>
+                            <View>
+                                <Text style={publicStyles.submitDateText}>تاریخ انتشار</Text>
+                            </View>
+                        </View>
+                        <View style={publicStyles.flexRowStyle}>
+                            <View style={publicStyles.textSpace}>
+                                <Text style={[stylesPage.fontSt, {color:this.checkColor()}]}>{this.props.deliveryDate}</Text>
+                            </View>
+                            <View>
+                                <Text style={[stylesPage.fontSt, {color:this.checkColor()}]}>تاریخ تحویل</Text>
+                            </View>
+                        </View>
+                    </View>
+                    <View style={stylesPage.descriptionView}>
+                        <ParsedText
+                            style={stylesPage.descriptionTxtHw}
+                            parse={[
+                                { type: 'url', style: stylesPage.linkStyle, onPress: this.onUrlPress },
+                                { type: 'phone', style: stylesPage.linkStyle,  onPress: this.onPhonePress },
+                                { type: 'email',style: stylesPage.linkStyle,  onPress: this.onEmailPress },
+                            ]}
+                            childrenProps={{ ...this.props.textProps }}
+                        >
+                            {this.props.description}
+                        </ParsedText>
+                    </View>
+                    <View style={publicStyles.uploadView}>
+                        {
+                            this.props.upload ?
+                                <View style={stylesPage.downloadContainer}>
+                                    <TouchableOpacity onPress={() => {this.setModalVisible(true);}} style={stylesPage.downloadBtn}>
+                                        <Text style={stylesPage.loadingText}>بارگذاری</Text>
+                                        <LocalIcon style={[publicStyles.iconUpload, {paddingLeft: 5}]} name="icon_upload_cloud" />
+                                    </TouchableOpacity>
+                                </View>
+                                : null
+                        }
+                        <View>
+                            <ProgressDialog
+                                messageStyle={publicStyles.titleMessage}
+                                contentStyle={publicStyles.loadMessage}
+                                visible={this.state.progressVisible}
+                                message="لطفاً کمی صبر کنید"
+                            />
+                        </View>
+                        {this.renderDownloadButton()}
+                    </View>
+                </View>
+            </View>
+        );
+    }
 }
+
+const styles = StyleSheet.create({
+    main:{
+        flex:1,
+    },
+    buttonStyle: {
+        backgroundColor:mainColors.appColorLight,
+        width:200,
+        flex:1,
+        justifyContent:'center',
+        alignItems:'center',
+        borderRadius:5,
+    },
+    textStyle: {
+        color: mainColors.contentText,
+        fontSize:16,
+        textAlign:'right',
+    },
+    recordIconContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    recordIcon: {
+        color: 'red',
+        fontSize: 18,
+        marginRight: 10,
+    },
+});
 
 export {HomeworkArchiveItem};
 
