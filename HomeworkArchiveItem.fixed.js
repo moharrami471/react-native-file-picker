@@ -132,6 +132,18 @@ class HomeworkArchiveItem extends Component {
         }, ms);
     }
 
+    // باز کردن فایل فقط یکبار (حل مشکل چندبار باز شدن Open with...)
+    openFileOnce = (attachmentId, path) => {
+        const key = `open_${attachmentId}`;
+        if (this._isLocked(key)) return;
+        this._lock(key, 4000);
+
+        FileViewer.open(path, {
+            showOpenWithDialog: true,
+            showAppsSuggestions: true,
+        }).catch(() => {});
+    };
+
     componentWillMount(){
         this.getClassEventDoneInfo();
     }
@@ -528,7 +540,7 @@ class HomeworkArchiveItem extends Component {
     }
 
     downloadFile(attachmentId, show, originalFileName) {
-        // FIX 1: جلوگیری از چندبار اجرا شدن
+        // جلوگیری از دانلودِ دوباره پشت سر هم
         const lockKey = `dl_${attachmentId}_${show ? 'open' : 'dl'}`;
         if (this._isLocked(lockKey)) return;
         this._lock(lockKey, 2500);
@@ -625,26 +637,20 @@ class HomeworkArchiveItem extends Component {
                                 });
 
                                 // فقط یکبار باز کن (بدون mimeType تا خطای No app associated کم شود)
-                                const openOnce = () =>
-                                    FileViewer.open(realPath, {
-                                        showOpenWithDialog: true,
-                                        showAppsSuggestions: true,
-                                    }).catch(() => {});
-
                                 if(!show) {
                                     Alert.alert(
                                         '',
                                         'دانلود به پایان رسید',
                                         [
                                             {
-                                                text: 'باز کردن فایل', onPress: () => openOnce(),
+                                            text: 'باز کردن فایل', onPress: () => this.openFileOnce(attachmentId, realPath),
                                             },
                                             {text: 'باشه'},
                                         ],
                                     );
                                 }
                                 else if (show) {
-                                    openOnce();
+                                this.openFileOnce(attachmentId, realPath);
                                 }
                             })
                             .catch((err) => {
@@ -667,11 +673,6 @@ class HomeworkArchiveItem extends Component {
     }
 
     beforeDownloadFile(attachmentId, show, originalFileName) {
-        // FIX 1: جلوگیری از چندبار باز شدن پنجره
-        const lockKey = `open_${attachmentId}`;
-        if (this._isLocked(lockKey)) return;
-        this._lock(lockKey, 2500);
-
         let flag = false;
         let pt = '';
         let mt = '';
@@ -724,17 +725,8 @@ class HomeworkArchiveItem extends Component {
                                         await RNFS.exists(pt)
                                             .then((result) => {
                                                 if(result) {
-                                                    FileViewer.open(pt, {
-                                                        showOpenWithDialog: true,
-                                                        showAppsSuggestions: true,
-                                                    })
-                                                        .then(() => {
-                                                            // success
-                                                        })
-                                                        .catch(error => {
-                                                            // اگر باز نشد، دانلود مجدد
-                                                            this.downloadFile(attachmentId, show, originalFileName);
-                                                        });
+                                                    // فقط یکبار باز کن
+                                                    this.openFileOnce(attachmentId, pt);
                                                 }
                                                 else {
                                                     this.downloadFile(attachmentId, show, originalFileName);
